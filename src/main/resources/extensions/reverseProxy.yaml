@@ -1,0 +1,12 @@
+apiVersion: plugin.halo.run/v1alpha1
+kind: ReverseProxy
+metadata:
+  # Halo 不会自动暴露插件 static/ 目录，须通过 ReverseProxy 声明。
+  # 规则：path 前缀会出现在最终 URL 的 /plugins/{插件名}/assets/ 之后。
+  # 故 widget.js 实际访问地址为 /plugins/recent-comments/assets/static/widget.js
+  # （与官方 plugin-comment-widget 的 reverseProxy.yaml 同款写法）。
+  name: recent-comments-static
+rules:
+  - path: /static/**
+    file:
+      directory: static

@@ -18,7 +18,7 @@
 任意主题的侧边栏 / 页脚模板中，两步接入：
 
 ```html
-<script src="/plugins/recent-comments/assets/widget.js" defer></script>
+<script src="/plugins/recent-comments/assets/static/widget.js" defer></script>
 <recent-comments size="5"></recent-comments>
 ```
 
