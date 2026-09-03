@@ -10,6 +10,11 @@ spec:
   version: "${version}"
   enabled: true
   requires: ">=2.25.0"
+  # 后台设置表单与对应 ConfigMap（settings.yaml 的 metadata.name 必须与 settingName 一致）。
+  # 用户在 Console 保存设置后写入 configMapName 指定的 ConfigMap，
+  # 端点经 ReactiveSettingFetcher 读取（自带缓存 + 变更自动刷新）。
+  settingName: recent-comments-setting
+  configMapName: recent-comments-configmap
   author:
     name: lqbby
     website: https://www.lqbby.com

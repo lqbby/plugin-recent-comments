@@ -2,6 +2,16 @@
 
 本插件最早是作者博客主题 Ethereal（halo-dev 生态）的配套内部插件，侧边栏「最新评论」由主题组件直接渲染（v0.x 私有历史，未公开发布）。自 1.0.0 起独立为通用插件：中性命名、通用 API group，并内置可嵌入的 Web Component，供任意主题使用。
 
+## 1.0.2（2026-09-03）
+
+新增插件后台可自定义设置（Console → 插件 → 最近评论 → 设置）。
+
+- **默认返回条数 `defaultSize`**（1-50，默认 5）：请求未携带 size 参数（或非法）时的返回条数。
+- **单次请求上限 `maxSize`**（1-100，默认 20）：size 超限按该值截断，防止大查询拖垮站点。
+- **结果缓存秒数 `cacheSeconds`**（0-3600，默认 0 即禁用）：聚合结果服务端缓存，按「单次请求上限」存满量、按各请求 size 切片返回；流量大的站点建议 30-300 秒。
+- 实现：新增 `extensions/settings.yaml`（Setting 表单）+ `plugin.yaml` 关联 `settingName`/`configMapName` + 端点注入 `ReactiveSettingFetcher`（自带配置缓存与变更自动刷新）；用户从未保存过设置时回退内置默认值，行为与 1.0.1 完全一致。
+- `RecentCommentsConfig` 为纯 POJO（项目未引 lombok），字段均包装类型以区分「未配置」与「配置为 0」。
+
 ## 1.0.1（2026-09-03）
 
 修复 `static/widget.js` 无法通过 `/plugins/recent-comments/assets/**` 访问的问题（安装后 404）。

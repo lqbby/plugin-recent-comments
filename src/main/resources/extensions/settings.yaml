@@ -1,0 +1,36 @@
+apiVersion: v1alpha1
+kind: Setting
+metadata:
+  name: recent-comments-setting
+spec:
+  forms:
+    - group: recentComments
+      label: 接口设置
+      formSchema:
+        - $formkit: number
+          name: defaultSize
+          label: 默认返回条数
+          help: 请求未携带 size 参数（或参数非法）时返回的条数，1-50
+          min: 1
+          max: 50
+          step: 1
+          validation: required|min:1|max:50
+          value: 5
+        - $formkit: number
+          name: maxSize
+          label: 单次请求上限
+          help: size 参数超过该值时按该值截断，防止 size=9999 之类的大查询拖垮站点，1-100
+          min: 1
+          max: 100
+          step: 1
+          validation: required|min:1|max:100
+          value: 20
+        - $formkit: number
+          name: cacheSeconds
+          label: 结果缓存秒数
+          help: 聚合结果的服务端缓存时长，0 为禁用（默认，实时查询）。流量较大的站点建议 30-300 秒；新发表/新审核的评论在缓存过期后可见
+          min: 0
+          max: 3600
+          step: 1
+          validation: required|min:0|max:3600
+          value: 0

@@ -29,6 +29,7 @@ import run.halo.app.extension.GroupVersionKind;
 import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.Ref;
 import run.halo.app.extension.Unstructured;
+import run.halo.app.plugin.ReactiveSettingFetcher;
 
 /**
  * 全局最新评论聚合端点：{@code GET comments/latest?size=5}。
@@ -37,19 +38,39 @@ import run.halo.app.extension.Unstructured;
  * 这里在后端一次性遍历 Comment 并按创建时间倒序截取，把瀑布压成 1 个请求。
  *
  * <p>响应体只保留渲染所需字段，IP / UA / owner 原始注解均不外泄。
+ *
+ * <p>行为可通过插件后台设置（extensions/settings.yaml，recentComments 分组）调整：
+ * 默认返回条数 / 单次请求上限 / 结果缓存秒数；未保存过设置时使用内置默认值。
  */
 @Component
 public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
 
+    private static final String SETTING_GROUP = "recentComments";
+    /** 与 settings.yaml 各字段的 value 保持一致的内置默认值。 */
     private static final int DEFAULT_SIZE = 5;
     private static final int MAX_SIZE = 20;
+    private static final int CACHE_SECONDS = 0;
     /** subjectRef.version 缺失时的兜底版本，Halo 内置扩展多为 v1alpha1。 */
     private static final String FALLBACK_VERSION = "v1alpha1";
 
     private final ExtensionClient client;
+    private final ReactiveSettingFetcher settingFetcher;
 
-    public EtherealCommentsLatestEndpoint(ExtensionClient client) {
+    /** 聚合结果服务端缓存（cacheSeconds > 0 时启用）。 */
+    private record CacheEntry(long cachedAt, int maxSize, int total,
+                              List<LatestCommentItem> items) {
+    }
+
+    private volatile CacheEntry cache;
+
+    /** 设置项归一化后的生效值（null 安全，超出范围回退默认）。 */
+    private record Effective(int defaultSize, int maxSize, int cacheSeconds) {
+    }
+
+    public EtherealCommentsLatestEndpoint(ExtensionClient client,
+        ReactiveSettingFetcher settingFetcher) {
         this.client = client;
+        this.settingFetcher = settingFetcher;
     }
 
     @Override
@@ -65,45 +86,89 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
     }
 
     private Mono<ServerResponse> latest(ServerRequest request) {
-        int size = parseSize(request);
-        return Mono.fromCallable(() -> queryLatest(size))
-            .subscribeOn(Schedulers.boundedElastic())
-            .flatMap(result -> ServerResponse.ok().bodyValue(result));
+        // ReactiveSettingFetcher 自带缓存且配置变更时自动刷新，直接调用即得最新配置；
+        // 用户从未保存过设置时 ConfigMap 不存在，补一个空配置走内置默认值。
+        return settingFetcher.fetch(SETTING_GROUP, RecentCommentsConfig.class)
+            .onErrorResume(e -> Mono.just(new RecentCommentsConfig()))
+            .defaultIfEmpty(new RecentCommentsConfig())
+            .flatMap(config -> {
+                Effective eff = effectiveOf(config);
+                int size = parseSize(request, eff);
+                return Mono.fromCallable(() -> queryLatest(eff, size))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    .flatMap(result -> ServerResponse.ok().bodyValue(result));
+            });
     }
 
-    private int parseSize(ServerRequest request) {
+    private Effective effectiveOf(RecentCommentsConfig config) {
+        int maxSize = clamp(config.getMaxSize(), 1, 100, MAX_SIZE);
+        int defaultSize = clamp(config.getDefaultSize(), 1, maxSize, DEFAULT_SIZE);
+        int cacheSeconds = clamp(config.getCacheSeconds(), 0, 3600, CACHE_SECONDS);
+        return new Effective(defaultSize, maxSize, cacheSeconds);
+    }
+
+    private int clamp(Integer raw, int min, int max, int fallback) {
+        if (raw == null) {
+            return fallback;
+        }
+        return Math.max(min, Math.min(max, raw));
+    }
+
+    private int parseSize(ServerRequest request, Effective eff) {
         String raw = request.queryParam("size").orElse("");
         int size;
         try {
             size = Integer.parseInt(raw.trim());
         } catch (NumberFormatException e) {
-            size = DEFAULT_SIZE;
+            size = eff.defaultSize();
         }
         if (size <= 0) {
-            return DEFAULT_SIZE;
+            return eff.defaultSize();
         }
-        return Math.min(size, MAX_SIZE);
+        return Math.min(size, eff.maxSize());
     }
 
-    private LatestCommentResult queryLatest(int size) {
+    private LatestCommentResult queryLatest(Effective eff, int size) {
+        if (eff.cacheSeconds() <= 0) {
+            cache = null;
+            List<Comment> visible = queryVisible();
+            List<LatestCommentItem> items = visible.stream()
+                .limit(size)
+                .map(this::toItem)
+                .toList();
+            return new LatestCommentResult(size, visible.size(), items);
+        }
+
+        long now = System.currentTimeMillis();
+        CacheEntry entry = cache;
+        if (entry == null
+            || now - entry.cachedAt() > eff.cacheSeconds() * 1000L
+            || entry.maxSize() != eff.maxSize()) {
+            List<Comment> visible = queryVisible();
+            // 缓存按「单次请求上限」存满量，后续请求按各自 size 切片即可命中
+            List<LatestCommentItem> items = visible.stream()
+                .limit(eff.maxSize())
+                .map(this::toItem)
+                .toList();
+            entry = new CacheEntry(now, eff.maxSize(), visible.size(), items);
+            cache = entry;
+        }
+        List<LatestCommentItem> sliced = entry.items().size() > size
+            ? entry.items().subList(0, size) : entry.items();
+        return new LatestCommentResult(size, entry.total(), sliced);
+    }
+
+    private List<Comment> queryVisible() {
         var options = ListOptions.builder()
             .andQuery(ExtensionUtil.notDeleting())
             .build();
         List<Comment> all = client.listAll(Comment.class, options, Sort.unsorted());
-
-        List<Comment> visible = all.stream()
+        return all.stream()
             .filter(comment -> comment.getSpec() != null)
             .filter(comment -> Boolean.TRUE.equals(comment.getSpec().getApproved()))
             .filter(comment -> !Boolean.TRUE.equals(comment.getSpec().getHidden()))
             .sorted(Comparator.<Comment, Instant>comparing(this::creationTimeOf).reversed())
             .toList();
-
-        List<LatestCommentItem> items = visible.stream()
-            .limit(size)
-            .map(this::toItem)
-            .toList();
-
-        return new LatestCommentResult(size, visible.size(), items);
     }
 
     private LatestCommentItem toItem(Comment comment) {
