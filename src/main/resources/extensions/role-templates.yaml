@@ -1,0 +1,21 @@
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: recent-comments-public
+  labels:
+    halo.run/role-template: "true"
+    halo.run/hidden: "true"
+    rbac.authorization.halo.run/aggregate-to-anonymous: "true"
+  annotations:
+    rbac.authorization.halo.run/module: "最近评论"
+    rbac.authorization.halo.run/display-name: "读取全局最新评论"
+rules:
+  # ⚠️ Halo 对 /apis/<group>/<version>/comments/latest 按「资源 comments + 子资源 latest」匹配，
+  #    resources 必须含裸主资源 "comments"（单写 "comments/latest" 整串匹配不上 → 匿名 302）。
+  #    对照：plugin-comment-next 的 featured 也是靠 resources 含 "comments" 才命中（2026-09-03 实锤）。
+  - apiGroups: [ "api.recent-comments.halo.run" ]
+    resources: [ "comments", "comments/latest" ]
+    verbs: [ "get", "list" ]
+  - nonResourceURLs:
+      - "/apis/api.recent-comments.halo.run/v1alpha1/comments/latest"
+    verbs: [ "get", "list" ]

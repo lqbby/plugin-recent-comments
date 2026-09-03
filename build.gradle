@@ -1,0 +1,48 @@
+plugins {
+    id 'java'
+}
+
+group 'run.halo.recentcomments'
+version '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = "UTF-8"
+    options.release = 21
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation platform('run.halo.tools.platform:plugin:2.25.0')
+    compileOnly 'run.halo.app:api'
+}
+
+// Halo 要求 plugin.yaml 的 spec.version 必填（完整 SemVer）。
+// 官方做法是用 run.halo.plugin.devtools 自动从 Gradle 项目版本注入；本工程没引入该插件，
+// 所以这里手动展开，保持「版本号单一来源 = 本文件的 version」。
+//
+// ⚠️ devtools 另有两项职责，去掉后必须手工补齐，缺一即静默故障：
+//   1) spec.version 注入（见上）。
+//   2) 生成 META-INF/plugin-components.idx：Halo 的 SpringComponentsFinder 只读该文件
+//      决定哪些类注册进插件 IOC（不扫 classpath）。缺失 → 插件 context 零组件 →
+//      CustomEndpoint 不聚合 → /apis/... 端点路由不挂载 → 匿名访问 404 No static resource，
+//      而插件仍 STARTED、extensions/ 下 role-templates 仍正常创建（极易误判）。
+//      本工程手工维护该 idx（见 src/main/resources/META-INF/plugin-components.idx），
+//      新增 @Component 组件类时必须同步追加类名。
+processResources {
+    filesMatching("plugin.yaml") {
+        expand(version: project.version)
+    }
+}
+
+jar {
+    archiveBaseName = 'recent-comments'
+}

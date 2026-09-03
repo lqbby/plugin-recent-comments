@@ -1,0 +1,13 @@
+# Gradle
+.gradle/
+build/
+
+# 本地部署脚本（含 NAS 连接信息，严禁入库）
+deploy/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db

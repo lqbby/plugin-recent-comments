@@ -1,0 +1,24 @@
+apiVersion: plugin.halo.run/v1alpha1
+kind: Plugin
+metadata:
+  # 官方规范：插件唯一标识，仅含小写字母、数字或 "-"，以字母或数字开头结尾。
+  name: recent-comments
+spec:
+  # 官方规范：必须为完整 SemVer，且官方 Gradle 插件会自动从 Gradle 项目版本注入。
+  # 本工程未引入 run.halo.plugin.devtools，改由 build.gradle 的 processResources
+  # 把 project.version 展开到这里（见 build.gradle 同名注释），保持版本单一来源。
+  version: "${version}"
+  enabled: true
+  requires: ">=2.25.0"
+  author:
+    name: lqbby
+    website: https://www.lqbby.com
+  logo: logo.svg
+  homepage: https://github.com/lqbby/plugin-recent-comments
+  repo: https://github.com/lqbby/plugin-recent-comments
+  issues: https://github.com/lqbby/plugin-recent-comments/issues
+  displayName: "最近评论 Recent Comments"
+  description: "全局最新评论聚合端点与可嵌入侧边栏组件：把侧边栏最新评论的 N+1 次请求合并为 1 次，自带 <recent-comments> Web Component，任意主题两行即可接入。返回体已剔除 IP、UA 等敏感字段，评论头像/昵称与评论区完全一致。"
+  license:
+    - name: "GPL-3.0"
+      url: "https://www.gnu.org/licenses/gpl-3.0.txt"
