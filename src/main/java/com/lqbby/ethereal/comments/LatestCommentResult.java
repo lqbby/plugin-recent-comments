@@ -1,4 +1,4 @@
-package run.halo.ethereal.comments;
+package com.lqbby.ethereal.comments;
 
 import java.util.List;
 
@@ -9,5 +9,5 @@ import java.util.List;
  * @param total 全站可见评论总数（approved 且未 hidden，不限本次返回条数）
  * @param items 按创建时间倒序的评论列表
  */
-public record LatestCommentResult(int size, int total, List<LatestCommentItem> items) {
+public record LatestCommentResult(int size, long total, List<LatestCommentItem> items) {
 }

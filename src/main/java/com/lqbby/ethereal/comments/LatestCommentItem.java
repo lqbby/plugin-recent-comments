@@ -1,4 +1,4 @@
-package run.halo.ethereal.comments;
+package com.lqbby.ethereal.comments;
 
 /**
  * 单条最新评论的脱敏视图。

@@ -1,4 +1,4 @@
-package run.halo.ethereal.comments;
+package com.lqbby.ethereal.comments;
 
 import org.springframework.stereotype.Component;
 import run.halo.app.plugin.BasePlugin;

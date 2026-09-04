@@ -28,9 +28,9 @@ spec:
         - $formkit: number
           name: cacheSeconds
           label: 结果缓存秒数
-          help: 聚合结果的服务端缓存时长，0 为禁用（默认，实时查询）。流量较大的站点建议 30-300 秒；新发表/新审核的评论在缓存过期后可见
+          help: 聚合结果的服务端缓存时长（默认 60 秒，用于保护匿名访问），0 为禁用（实时查询）。新发表/新审核的评论在缓存过期后可见
           min: 0
           max: 3600
           step: 1
           validation: required|min:0|max:3600
-          value: 0
+          value: 60

@@ -1,4 +1,4 @@
-package run.halo.ethereal.comments;
+package com.lqbby.ethereal.comments;
 
 /**
  * 插件后台设置（Console → 插件 → 最近评论 → 设置），

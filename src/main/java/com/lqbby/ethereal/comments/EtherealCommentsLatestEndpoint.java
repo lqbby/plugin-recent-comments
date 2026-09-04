@@ -1,10 +1,13 @@
-package run.halo.ethereal.comments;
+package com.lqbby.ethereal.comments;
+
+import static run.halo.app.extension.index.query.Queries.and;
+import static run.halo.app.extension.index.query.Queries.equal;
+import static run.halo.app.extension.index.query.Queries.isNull;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -23,10 +26,11 @@ import run.halo.app.core.extension.content.Comment.CommentOwner;
 import run.halo.app.core.extension.endpoint.CustomEndpoint;
 import run.halo.app.core.extension.User;
 import run.halo.app.extension.ExtensionClient;
-import run.halo.app.extension.ExtensionUtil;
 import run.halo.app.extension.GroupVersion;
 import run.halo.app.extension.GroupVersionKind;
 import run.halo.app.extension.ListOptions;
+import run.halo.app.extension.ListResult;
+import run.halo.app.extension.PageRequestImpl;
 import run.halo.app.extension.Ref;
 import run.halo.app.extension.Unstructured;
 import run.halo.app.plugin.ReactiveSettingFetcher;
@@ -35,7 +39,8 @@ import run.halo.app.plugin.ReactiveSettingFetcher;
  * 全局最新评论聚合端点：{@code GET comments/latest?size=5}。
  *
  * <p>主题侧边栏原本需要「1 次 posts 列表 + N 次逐条评论」的 N+1 瀑布请求，
- * 这里在后端一次性遍历 Comment 并按创建时间倒序截取，把瀑布压成 1 个请求。
+ * 这里在后端用索引查询（fieldSelector + PageRequest）把「过滤 → 排序 → 分页」
+ * 全部下推到 Halo 扩展索引引擎，仅取实际需要的 {@code size} 条，把瀑布压成 1 个请求。
  *
  * <p>响应体只保留渲染所需字段，IP / UA / owner 原始注解均不外泄。
  *
@@ -49,7 +54,8 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
     /** 与 settings.yaml 各字段的 value 保持一致的内置默认值。 */
     private static final int DEFAULT_SIZE = 5;
     private static final int MAX_SIZE = 20;
-    private static final int CACHE_SECONDS = 0;
+    /** 匿名访问的默认结果缓存秒数（>0 才启用；0 表示实时查询）。 */
+    private static final int CACHE_SECONDS = 60;
     /** subjectRef.version 缺失时的兜底版本，Halo 内置扩展多为 v1alpha1。 */
     private static final String FALLBACK_VERSION = "v1alpha1";
 
@@ -57,7 +63,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
     private final ReactiveSettingFetcher settingFetcher;
 
     /** 聚合结果服务端缓存（cacheSeconds > 0 时启用）。 */
-    private record CacheEntry(long cachedAt, int maxSize, int total,
+    private record CacheEntry(long cachedAt, int maxSize, long total,
                               List<LatestCommentItem> items) {
     }
 
@@ -130,13 +136,13 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
 
     private LatestCommentResult queryLatest(Effective eff, int size) {
         if (eff.cacheSeconds() <= 0) {
+            // 未启用缓存：直接下推一次索引查询（过滤 + 排序 + 分页），只取 size 条
             cache = null;
-            List<Comment> visible = queryVisible();
-            List<LatestCommentItem> items = visible.stream()
-                .limit(size)
+            ListResult<Comment> page = queryPage(size);
+            List<LatestCommentItem> items = page.getItems().stream()
                 .map(this::toItem)
                 .toList();
-            return new LatestCommentResult(size, visible.size(), items);
+            return new LatestCommentResult(size, page.getTotal(), items);
         }
 
         long now = System.currentTimeMillis();
@@ -144,13 +150,12 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         if (entry == null
             || now - entry.cachedAt() > eff.cacheSeconds() * 1000L
             || entry.maxSize() != eff.maxSize()) {
-            List<Comment> visible = queryVisible();
             // 缓存按「单次请求上限」存满量，后续请求按各自 size 切片即可命中
-            List<LatestCommentItem> items = visible.stream()
-                .limit(eff.maxSize())
+            ListResult<Comment> page = queryPage(eff.maxSize());
+            List<LatestCommentItem> items = page.getItems().stream()
                 .map(this::toItem)
                 .toList();
-            entry = new CacheEntry(now, eff.maxSize(), visible.size(), items);
+            entry = new CacheEntry(now, eff.maxSize(), page.getTotal(), items);
             cache = entry;
         }
         List<LatestCommentItem> sliced = entry.items().size() > size
@@ -158,17 +163,25 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         return new LatestCommentResult(size, entry.total(), sliced);
     }
 
-    private List<Comment> queryVisible() {
+    /**
+     * 服务端索引查询：过滤（approved 且未 hidden 且未删除）+ 按创建时间倒序排序 + 分页，
+     * 全部下推到 Halo 扩展索引引擎，避免 listAll 全量读库 + 内存过滤排序。
+     *
+     * <p>{@code spec.approved}/{@code spec.hidden}/{@code spec.creationTime} 均由
+     * Halo 为 Comment 注册了索引（见 core 的 SchemeInitializer），可直接作 fieldSelector
+     * 与 sort 字段；未索引字段会被引擎拒绝。排序加 metadata.name 作稳定分页的次级键。
+     */
+    private ListResult<Comment> queryPage(int size) {
         var options = ListOptions.builder()
-            .andQuery(ExtensionUtil.notDeleting())
+            .fieldQuery(and(
+                equal("spec.approved", true),
+                equal("spec.hidden", false),
+                isNull("metadata.deletionTimestamp")
+            ))
             .build();
-        List<Comment> all = client.listAll(Comment.class, options, Sort.unsorted());
-        return all.stream()
-            .filter(comment -> comment.getSpec() != null)
-            .filter(comment -> Boolean.TRUE.equals(comment.getSpec().getApproved()))
-            .filter(comment -> !Boolean.TRUE.equals(comment.getSpec().getHidden()))
-            .sorted(Comparator.<Comment, Instant>comparing(this::creationTimeOf).reversed())
-            .toList();
+        var pageRequest = PageRequestImpl.of(1, size,
+            Sort.by(Sort.Order.desc("spec.creationTime"), Sort.Order.asc("metadata.name")));
+        return client.listBy(Comment.class, options, pageRequest);
     }
 
     private LatestCommentItem toItem(Comment comment) {
