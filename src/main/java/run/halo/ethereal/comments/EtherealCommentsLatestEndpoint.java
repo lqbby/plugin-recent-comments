@@ -231,6 +231,12 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             Optional<Map<String, Object>> data = fetchSubject(ref);
             permalink = data.map(d -> nestedString(d, "status", "permalink")).orElse(null);
             subjectTitle = data.map(d -> nestedString(d, "spec", "title")).orElse(null);
+            // 部分扩展没有 status.permalink（Moment 只有 metadata/owner/spec/stats；
+            // Plugin 扩展只有 spec/status.phase 等运行态），无法靠通用 fetchSubject 拿到前端链接，
+            // 这里按主题的固定路由规则兜底拼 permalink（评论锚点 #comment 由主题侧补）。
+            if (permalink == null) {
+                permalink = synthesizePermalink(ref);
+            }
         }
 
         return new LatestCommentItem(
@@ -244,6 +250,28 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             subjectTitle,
             permalink
         );
+    }
+
+    /**
+     * 无 status.permalink 的扩展按主题固定路由兜底拼前端链接。
+     *
+     * <p>目前覆盖两类（均为独立插件提供、无通用 permalink 的扩展）：
+     * <ul>
+     *   <li>Moment（瞬间）→ 主题 moments.astro 详情路由 {@code /moments/{name}}；</li>
+     *   <li>Plugin（插件页，如链接管理 PluginLinks）→ 主题 links.astro 路由 {@code /links}。</li>
+     * </ul>
+     * 其它拿不到 permalink 的 kind（如 Photo，暂无评论数据）保持 null，由主题侧回退 href="#"。
+     */
+    private String synthesizePermalink(Ref ref) {
+        String kind = ref.getKind();
+        if (kind == null) {
+            return null;
+        }
+        return switch (kind) {
+            case "Moment" -> "/moments/" + ref.getName();
+            case "Plugin" -> "PluginLinks".equals(ref.getName()) ? "/links" : null;
+            default -> null;
+        };
     }
 
     @SuppressWarnings("unchecked")
