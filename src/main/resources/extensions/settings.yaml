@@ -1,7 +1,7 @@
 apiVersion: v1alpha1
 kind: Setting
 metadata:
-  name: recent-comments-setting
+  name: ethereal-companion-setting
 spec:
   forms:
     - group: recentComments

@@ -3,7 +3,7 @@ plugins {
 }
 
 group 'com.lqbby'
-version '1.0.5'
+version '1.1.0'
 
 java {
     toolchain {
@@ -44,5 +44,5 @@ processResources {
 }
 
 jar {
-    archiveBaseName = 'recent-comments'
+    archiveBaseName = 'ethereal-companion'
 }

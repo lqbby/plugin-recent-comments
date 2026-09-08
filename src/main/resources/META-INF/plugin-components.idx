@@ -1,2 +1,3 @@
+com.lqbby.ethereal.EtherealCompanionPlugin
 com.lqbby.ethereal.comments.EtherealCommentsLatestEndpoint
-com.lqbby.ethereal.comments.EtherealCommentsLatestPlugin
+com.lqbby.ethereal.series.SeriesFinderImpl

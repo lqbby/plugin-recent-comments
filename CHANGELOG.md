@@ -1,6 +1,17 @@
 # CHANGELOG
 
-本插件最早是作者博客主题 Ethereal（halo-dev 生态）的配套内部插件，侧边栏「最新评论」由主题组件直接渲染（v0.x 私有历史，未公开发布）。自 1.0.0 起独立为通用插件：中性命名、通用 API group，并内置可嵌入的 Web Component，供任意主题使用。
+本插件最早是作者博客主题 Ethereal（halo-dev 生态）的配套内部插件，侧边栏「最新评论」由主题组件直接渲染（v0.x 私有历史，未公开发布）。自 1.0.0 起独立为通用插件：中性命名、通用 API group，并内置可嵌入的 Web Component，供任意主题使用。自 1.1.0 起重命名回「Ethereal 配套」并新增文章系列能力。
+
+## 1.1.0（2026-09-08）
+
+插件重命名并新增「文章系列」聚合能力。
+
+- **重命名**：插件标识由 `recent-comments` 改为 `ethereal-companion`（`metadata.name` / displayName「Ethereal 配套」/ 仓库 `lqbby/ethereal-companion`），JAR 产物同步更名；静态资源前缀随之变为 `/plugins/ethereal-companion/`。评论 API group `api.recent-comments.halo.run` **保持不变**（端点路径仍是 `comments/latest`）。
+- **新增文章系列 Finder**：`@Finder("recentCommentsSeriesFinder")`（`com.lqbby.ethereal.series` 包），一次 `client.listAll(Post.class)` 取回全部文章 → 内存过滤（已发布且未删除且公开可见）→ 按 `metadata.annotations["series"]` 分组 → 组内按 `seriesOrder` 升序（未填排最后，再按发布时间倒序）→ 系列按名称升序。主题经 `recentCommentsSeriesFinder.listAll()` / `.get(name)` 服务端渲染，无需前端 fetch。
+  - `SeriesView{ name, posts }`、`SeriesPostView{ name, title, permalink, order, publishTime }`。
+- **Java 包重构**：`BasePlugin` 入口类上移根包 `com.lqbby.ethereal.EtherealCompanionPlugin`（组件扫描根），其下 `comments`（评论端点）与 `series`（系列 Finder）两个子包。
+- **注释/文档**：修正 widget.js 头部路径（补 `/static/`）、README/CHANGELOG 全面更新。
+- 破坏性：插件标识变更意味着 Halo 视为**新插件**，需卸载旧 `recent-comments` 后安装 `ethereal-companion`；评论设置（defaultSize/maxSize/cacheSeconds）因 configMapName 变更需重新保存（默认值与旧版一致）。
 
 ## 1.0.2（2026-09-03）
 

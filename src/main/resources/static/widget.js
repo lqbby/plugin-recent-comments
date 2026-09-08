@@ -1,10 +1,10 @@
 /*!
- * recent-comments widget v1.0.0
- * 全局最新评论侧边栏组件（plugin: recent-comments）。
+ * ethereal-companion widget v1.1.0
+ * 全局最新评论侧边栏组件（plugin: ethereal-companion）。
  *
  * 用法（任意主题模板两行接入）：
  *   1. 在页面引入本脚本：
- *      <script src="/plugins/recent-comments/assets/widget.js" defer></script>
+ *      <script src="/plugins/ethereal-companion/assets/static/widget.js" defer></script>
  *   2. 在需要的位置放置组件（侧边栏 / 页脚均可）：
  *      <recent-comments size="5"></recent-comments>
  *

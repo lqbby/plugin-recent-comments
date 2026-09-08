@@ -2,7 +2,7 @@ apiVersion: plugin.halo.run/v1alpha1
 kind: Plugin
 metadata:
   # 官方规范：插件唯一标识，仅含小写字母、数字或 "-"，以字母或数字开头结尾。
-  name: recent-comments
+  name: ethereal-companion
 spec:
   # 官方规范：必须为完整 SemVer，且官方 Gradle 插件会自动从 Gradle 项目版本注入。
   # 本工程未引入 run.halo.plugin.devtools，改由 build.gradle 的 processResources
@@ -13,17 +13,17 @@ spec:
   # 后台设置表单与对应 ConfigMap（settings.yaml 的 metadata.name 必须与 settingName 一致）。
   # 用户在 Console 保存设置后写入 configMapName 指定的 ConfigMap，
   # 端点经 ReactiveSettingFetcher 读取（自带缓存 + 变更自动刷新）。
-  settingName: recent-comments-setting
-  configMapName: recent-comments-configmap
+  settingName: ethereal-companion-setting
+  configMapName: ethereal-companion-configmap
   author:
     name: lqbby
     website: https://www.lqbby.com
   logo: logo.svg
-  homepage: https://github.com/lqbby/plugin-recent-comments
-  repo: https://github.com/lqbby/plugin-recent-comments
-  issues: https://github.com/lqbby/plugin-recent-comments/issues
-  displayName: "最近评论 Recent Comments"
-  description: "全局最新评论聚合端点与可嵌入侧边栏组件：把侧边栏最新评论的 N+1 次请求合并为 1 次，自带 <recent-comments> Web Component，任意主题两行即可接入。返回体已剔除 IP、UA 等敏感字段，评论头像/昵称与评论区完全一致。"
+  homepage: https://github.com/lqbby/ethereal-companion
+  repo: https://github.com/lqbby/ethereal-companion
+  issues: https://github.com/lqbby/ethereal-companion/issues
+  displayName: "Ethereal 配套"
+  description: "Ethereal 主题的配套插件：① 全局最新评论聚合端点 + 可嵌入 <recent-comments> Web Component（把侧边栏 N+1 次请求合并为 1 次，已剔除 IP/UA 等敏感字段）；② 文章系列聚合 Finder（recentCommentsSeriesFinder），为主题提供 series/seriesOrder 注解的文章分组数据，供系列导航与 /series/ 列表页服务端渲染。"
   license:
     - name: "GPL-3.0"
       url: "https://www.gnu.org/licenses/gpl-3.0.txt"
