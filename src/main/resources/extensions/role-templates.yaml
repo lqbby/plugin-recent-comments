@@ -19,3 +19,10 @@ rules:
   - nonResourceURLs:
       - "/apis/api.recent-comments.halo.run/v1alpha1/comments/latest"
     verbs: [ "get", "list" ]
+  # 随机友链端点：同样按「资源 friends + 子资源 random」匹配，resources 必须含裸 "friends"。
+  - apiGroups: [ "api.recent-comments.halo.run" ]
+    resources: [ "friends", "friends/random" ]
+    verbs: [ "get", "list" ]
+  - nonResourceURLs:
+      - "/apis/api.recent-comments.halo.run/v1alpha1/friends/random"
+    verbs: [ "get", "list" ]

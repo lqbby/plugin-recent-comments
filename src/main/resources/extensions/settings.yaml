@@ -34,3 +34,33 @@ spec:
           step: 1
           validation: required|min:0|max:3600
           value: 60
+    - group: friendsRandom
+      label: 随机友链
+      formSchema:
+        - $formkit: number
+          name: defaultSize
+          label: 默认返回条数
+          help: 请求未携带 size 参数（或参数非法）时返回的条数，1-24
+          min: 1
+          max: 24
+          step: 1
+          validation: required|min:1|max:24
+          value: 6
+        - $formkit: number
+          name: maxSize
+          label: 单次请求上限
+          help: size 参数超过该值时按该值截断，防止 size=9999 之类的大查询拖垮站点，1-100
+          min: 1
+          max: 100
+          step: 1
+          validation: required|min:1|max:100
+          value: 24
+        - $formkit: number
+          name: cacheSeconds
+          label: 候选列表缓存秒数
+          help: 只缓存「全部友链的名单」，洗牌每次都重做，因此不影响随机性；0 为不缓存
+          min: 0
+          max: 3600
+          step: 1
+          validation: required|min:0|max:3600
+          value: 60
