@@ -1,12 +1,13 @@
 # Ethereal 配套（ethereal-companion）
 
-Ethereal 主题的配套插件，聚合两块能力：
+Ethereal 主题的配套插件，聚合三块能力：
 
 1. **全局最新评论** —— 聚合端点 + 可嵌入 `<recent-comments>` Web Component，把侧边栏最新评论原本的 N+1 次请求合并为 **1 次**；任意主题两行接入，头像/昵称与站点评论区完全一致。
 2. **文章系列（series）** —— 聚合 Finder（`recentCommentsSeriesFinder`），把文章 `series` / `seriesOrder` 注解分组排序后服务端渲染，供主题做「文章页系列导航」与「/series/ 系列列表页」。
+3. **随机友链** —— 端点 `friends/random`，服务端从全部友链里**随机**挑 N 条返回。用于主题「关于我 → 我的朋友」卡片：页面**不再下发全量友链**，体积与友链总数无关（友链上百条时尤其明显），且每次请求都是新组合。
 
-- 数据源：Halo 核心 `Comment` / `Post` 扩展，与其它评论插件解耦——无论站点用哪个评论插件，写入的评论都能被聚合；系列则直接读文章的 `metadata.annotations`。
-- 隐私：评论响应体只含渲染所需字段，**不返回** IP、UA 与 owner 原始注解；邮箱仅以 `sha256` 哈希（64 位十六进制）暴露，用于头像寻址，与 Halo 官方评论接口处理一致。
+- 数据源：Halo 核心 `Comment` / `Post` 扩展，与其它评论插件解耦——无论站点用哪个评论插件，写入的评论都能被聚合；系列则直接读文章的 `metadata.annotations`；友链读 **PluginLinks** 的 `Link` 扩展（`core.halo.run/v1alpha1/Link`），未安装该插件时端点返回空集合。
+- 隐私：评论响应体只含渲染所需字段，**不返回** IP、UA 与 owner 原始注解；邮箱仅以 `sha256` 哈希（64 位十六进制）暴露，用于头像寻址，与 Halo 官方评论接口处理一致；友链仅返回 `name` / `displayName` / `url` / `logo` / `description`，不外泄分组、优先级、RSS 与校验状态等内部字段。
 - 数据保存期限：插件自身**不存储任何数据**，实时读取 Halo 扩展即时返回；卸载即停止聚合，数据始终跟随站点评论/文章本身。
 - 兼容：Halo `>=2.25.0`；浏览器端零依赖、零构建。
 
@@ -88,6 +89,31 @@ GET /apis/api.recent-comments.halo.run/v1alpha1/comments/latest?size=5
 `SeriesView`：`name`（系列名）、`posts`（`List<SeriesPostView>`，按 `seriesOrder` 升序，未填序号的排最后再按发布时间倒序）。
 
 `SeriesPostView`：`name`（文章唯一标识）、`title`、`permalink`（来自 `status.permalink`，缺失回退 `/archives/{slug}`）、`order`（`seriesOrder` 解析结果）、`publishTime`（ISO 8601）。
+
+## 三、随机友链
+
+### 直接调用 API
+
+```
+GET /apis/api.recent-comments.halo.run/v1alpha1/friends/random?size=6
+```
+
+匿名可读。返回 `{ "total": 14, "items": [ … ] }` —— `total` 是站点全部友链条数，`items` 是本次命中的随机条目；单条结构：`name` / `displayName` / `url` / `logo` / `description`。
+
+- **每次调用都重新洗牌**（候选名单可缓存，洗牌不缓存），同一访客反复请求会拿到不同组合。
+- ⚠️ **请带 `?_=<时间戳>` 之类的可变参数调用**：服务端虽已随机，但若被 CDN / 边缘缓存命中，不同访客会拿到同一份响应，「每次进页都换一批」就失效了。
+- 依赖 **PluginLinks** 插件（读其 `Link` 扩展）；未安装时返回 `{ "total": 0, "items": [] }`，不报错。
+- 后台「设置 → 随机友链」可配：默认条数（6）、单次上限（24）、候选名单缓存秒数（60）。
+
+### 主题接入
+
+```html
+<div class="about-friends"
+     data-friends-endpoint="/apis/api.recent-comments.halo.run/v1alpha1/friends/random"
+     data-friends-count="6"></div>
+```
+
+再由前端脚本 fetch 该端点并渲染即可（Ethereal 主题的 `extend-pages.js` 即此实现：请求带 `?_=<时间戳>` 绕缓存，渲染全程用 DOM API + `textContent` 防 XSS）。
 
 ## 安装
 

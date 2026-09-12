@@ -2,6 +2,18 @@
 
 本插件最早是作者博客主题 Ethereal（halo-dev 生态）的配套内部插件，侧边栏「最新评论」由主题组件直接渲染（v0.x 私有历史，未公开发布）。自 1.0.0 起独立为通用插件：中性命名、通用 API group，并内置可嵌入的 Web Component，供任意主题使用。自 1.1.0 起重命名回「Ethereal 配套」并新增文章系列能力。
 
+## 1.2.0（2026-09-13）
+
+新增「随机友链」端点，供主题按需拉取友链、避免全量下发。
+
+- **新增端点** `GET /apis/api.recent-comments.halo.run/v1alpha1/friends/random?size=6`：服务端从全部友链中随机挑 N 条返回，匿名可读。
+  - 数据源为 **PluginLinks** 的 `Link` 扩展；未安装时返回空集合，不影响其余功能。
+  - 候选名单（全部友链的 name）可缓存（默认 60 秒）以减轻匿名请求压力，但**洗牌每次请求都重做**，故缓存不影响随机性。
+  - 响应仅含 `name` / `displayName` / `url` / `logo` / `description`，不外泄分组、优先级、RSS 与校验状态。
+  - 新增匿名角色规则（`extensions/role-templates.yaml`）与后台设置组「随机友链」。
+- **背景**：主题「关于我 → 我的朋友」原先由 Thymeleaf 把**全部**友链卡片写进 HTML、前端再洗牌截前 N。友链上百条时页面体积随数量线性膨胀（每卡约 650B，且浏览器要解析再删掉 99% 的节点）。改为服务端随机 + 按需下发后，**页面体积与友链总数无关**。
+- **实现注意**：Link 属于其他插件，Halo 插件间 classloader 隔离，本插件不引用其 Java 类；改为经 `SchemeManager` 取到 Class（仅作参数传递）→ `listAllNames` 取名单 → 逐个 `fetch(GVK, name)` 拿 `Unstructured`。
+
 ## 1.1.0（2026-09-08）
 
 插件重命名并新增「文章系列」聚合能力。
