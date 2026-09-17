@@ -8,12 +8,14 @@ package com.lqbby.ethereal.series;
  * @param permalink 文章链接（来自 {@code status.permalink}，缺失时回退 /archives/{slug}）
  * @param order 系列内序号（{@code metadata.annotations["seriesOrder"]} 解析结果，缺失为 null）
  * @param publishTime 发布时间（ISO 8601，缺失为 null）
+ * @param cover 封面图 URL（{@code spec.cover}，缺失为 null）—— 首页「最新系列」卡片取系列最新一篇的封面
  */
 public record SeriesPostView(
     String name,
     String title,
     String permalink,
     Integer order,
-    String publishTime
+    String publishTime,
+    String cover
 ) {
 }

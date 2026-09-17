@@ -20,6 +20,14 @@ public interface SeriesFinder {
     Flux<SeriesView> listAll();
 
     /**
+     * 返回「最近更新」的若干个系列，按各自最新一篇文章的发布时间倒序（发布时间全缺失的系列排最后，
+     * 同刻再按系列名升序），最多 {@code limit} 个。首页「最新系列」卡片条用。
+     *
+     * @param limit 上限；{@code <= 0} 时取默认上限
+     */
+    Flux<SeriesView> listLatest(int limit);
+
+    /**
      * 按系列名取单个系列；不存在时返回空 {@link Mono}。
      */
     Mono<SeriesView> get(String name);
