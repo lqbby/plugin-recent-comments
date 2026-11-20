@@ -2,3 +2,5 @@ com.lqbby.ethereal.EtherealCompanionPlugin
 com.lqbby.ethereal.comments.EtherealCommentsLatestEndpoint
 com.lqbby.ethereal.friends.EtherealFriendsRandomEndpoint
 com.lqbby.ethereal.series.SeriesFinderImpl
+com.lqbby.ethereal.presence.PresenceEndpoint
+com.lqbby.ethereal.presence.ReceiptsEndpoint

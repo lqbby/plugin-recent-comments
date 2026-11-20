@@ -26,3 +26,19 @@ rules:
   - nonResourceURLs:
       - "/apis/api.recent-comments.halo.run/v1alpha1/friends/random"
     verbs: [ "get", "list" ]
+  # 在线状态（心跳）：匿名可上报心跳 + 读取在线列表。
+  - apiGroups: [ "api.recent-comments.halo.run" ]
+    resources: [ "presence", "presence/heartbeat" ]
+    verbs: [ "get", "list", "create" ]
+  - nonResourceURLs:
+      - "/apis/api.recent-comments.halo.run/v1alpha1/presence"
+      - "/apis/api.recent-comments.halo.run/v1alpha1/presence/heartbeat"
+    verbs: [ "get", "list", "create" ]
+  # 已读回执：匿名可标记已读 + 读取已读名单。
+  - apiGroups: [ "api.recent-comments.halo.run" ]
+    resources: [ "receipts", "receipts/read" ]
+    verbs: [ "get", "list", "create" ]
+  - nonResourceURLs:
+      - "/apis/api.recent-comments.halo.run/v1alpha1/receipts"
+      - "/apis/api.recent-comments.halo.run/v1alpha1/receipts/read"
+    verbs: [ "get", "list", "create" ]
