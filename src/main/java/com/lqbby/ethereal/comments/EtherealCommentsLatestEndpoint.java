@@ -70,7 +70,12 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
     private volatile CacheEntry cache;
 
     /** 设置项归一化后的生效值（null 安全，超出范围回退默认）。 */
-    private record Effective(int defaultSize, int maxSize, int cacheSeconds) {
+    private record Effective(int defaultSize, int maxSize, int cacheSeconds,
+                             boolean includePage) {
+    }
+
+    /** 查询结果（过滤后的条目 + 库内总数）。 */
+    private record PageResult(List<Comment> items, long total) {
     }
 
     public EtherealCommentsLatestEndpoint(ExtensionClient client,
@@ -110,7 +115,9 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         int maxSize = clamp(config.getMaxSize(), 1, 100, MAX_SIZE);
         int defaultSize = clamp(config.getDefaultSize(), 1, maxSize, DEFAULT_SIZE);
         int cacheSeconds = clamp(config.getCacheSeconds(), 0, 3600, CACHE_SECONDS);
-        return new Effective(defaultSize, maxSize, cacheSeconds);
+        // 未配置时默认排除页面评论（侧栏「最近评论」只聚合文章评论）
+        boolean includePage = Boolean.TRUE.equals(config.getIncludePageComments());
+        return new Effective(defaultSize, maxSize, cacheSeconds, includePage);
     }
 
     private int clamp(Integer raw, int min, int max, int fallback) {
@@ -138,11 +145,11 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         if (eff.cacheSeconds() <= 0) {
             // 未启用缓存：直接下推一次索引查询（过滤 + 排序 + 分页），只取 size 条
             cache = null;
-            ListResult<Comment> page = queryPage(size);
-            List<LatestCommentItem> items = page.getItems().stream()
+            PageResult page = queryPage(size, eff.includePage());
+            List<LatestCommentItem> items = page.items().stream()
                 .map(this::toItem)
                 .toList();
-            return new LatestCommentResult(size, page.getTotal(), items);
+            return new LatestCommentResult(size, page.total(), items);
         }
 
         long now = System.currentTimeMillis();
@@ -151,11 +158,11 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             || now - entry.cachedAt() > eff.cacheSeconds() * 1000L
             || entry.maxSize() != eff.maxSize()) {
             // 缓存按「单次请求上限」存满量，后续请求按各自 size 切片即可命中
-            ListResult<Comment> page = queryPage(eff.maxSize());
-            List<LatestCommentItem> items = page.getItems().stream()
+            PageResult page = queryPage(eff.maxSize(), eff.includePage());
+            List<LatestCommentItem> items = page.items().stream()
                 .map(this::toItem)
                 .toList();
-            entry = new CacheEntry(now, eff.maxSize(), page.getTotal(), items);
+            entry = new CacheEntry(now, eff.maxSize(), page.total(), items);
             cache = entry;
         }
         List<LatestCommentItem> sliced = entry.items().size() > size
@@ -171,7 +178,9 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
      * Halo 为 Comment 注册了索引（见 core 的 SchemeInitializer），可直接作 fieldSelector
      * 与 sort 字段；未索引字段会被引擎拒绝。排序加 metadata.name 作稳定分页的次级键。
      */
-    private ListResult<Comment> queryPage(int size) {
+    private PageResult queryPage(int size, boolean includePage) {
+        // 需要过滤时多取候选，保证过滤后仍能凑够 size 条
+        int fetchSize = includePage ? size : Math.min(Math.max(size * 6, 30), 200);
         var options = ListOptions.builder()
             .fieldQuery(and(
                 equal("spec.approved", true),
@@ -179,9 +188,33 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
                 isNull("metadata.deletionTimestamp")
             ))
             .build();
-        var pageRequest = PageRequestImpl.of(1, size,
+        var pageRequest = PageRequestImpl.of(1, fetchSize,
             Sort.by(Sort.Order.desc("spec.creationTime"), Sort.Order.asc("metadata.name")));
-        return client.listBy(Comment.class, options, pageRequest);
+        ListResult<Comment> raw = client.listBy(Comment.class, options, pageRequest);
+        long total = raw.getTotal();
+        if (includePage) {
+            return new PageResult(raw.getItems(), total);
+        }
+        List<Comment> filtered = raw.getItems().stream()
+            .filter(c -> !isPageSubject(c))
+            .limit(size)
+            .toList();
+        return new PageResult(filtered, total);
+    }
+
+    /**
+     * 判断评论主体是否为自定义页面（聊天室 / 关于 / 留言等）。
+     *
+     * <p>{@code subjectRef.kind} 未建索引，无法下推为 fieldSelector，故在内存过滤；
+     * Halo 的页面扩展正式名为 {@code SinglePage}，部分旧数据写成 {@code Page}，两者都算。
+     */
+    private boolean isPageSubject(Comment comment) {
+        var spec = comment.getSpec();
+        if (spec == null || spec.getSubjectRef() == null) {
+            return false;
+        }
+        String kind = spec.getSubjectRef().getKind();
+        return "SinglePage".equals(kind) || "Page".equals(kind);
     }
 
     private LatestCommentItem toItem(Comment comment) {

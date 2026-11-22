@@ -34,6 +34,11 @@ spec:
           step: 1
           validation: required|min:0|max:3600
           value: 60
+        - $formkit: switch
+          name: includePageComments
+          label: 包含页面评论
+          help: 开启后，聊天室 / 关于 / 留言等自定义页面的评论也会出现在「最近评论」里；默认关闭，只聚合文章评论
+          value: false
     - group: friendsRandom
       label: 随机友链
       formSchema:

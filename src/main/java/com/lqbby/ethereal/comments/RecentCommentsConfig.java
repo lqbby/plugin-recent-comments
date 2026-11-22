@@ -15,6 +15,9 @@ public class RecentCommentsConfig {
 
     private Integer cacheSeconds;
 
+    /** 是否把自定义页面（SinglePage/Page）的评论也算进「最近评论」，默认 false（排除）。 */
+    private Boolean includePageComments;
+
     public Integer getDefaultSize() {
         return defaultSize;
     }
@@ -37,5 +40,13 @@ public class RecentCommentsConfig {
 
     public void setCacheSeconds(Integer cacheSeconds) {
         this.cacheSeconds = cacheSeconds;
+    }
+
+    public Boolean getIncludePageComments() {
+        return includePageComments;
+    }
+
+    public void setIncludePageComments(Boolean includePageComments) {
+        this.includePageComments = includePageComments;
     }
 }
