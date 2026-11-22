@@ -8,6 +8,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
@@ -23,6 +26,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import run.halo.app.core.extension.content.Comment;
 import run.halo.app.core.extension.content.Comment.CommentOwner;
+import run.halo.app.core.extension.content.Reply;
 import run.halo.app.core.extension.endpoint.CustomEndpoint;
 import run.halo.app.core.extension.User;
 import run.halo.app.extension.ExtensionClient;
@@ -75,7 +79,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
     }
 
     /** 查询结果（过滤后的条目 + 库内总数）。 */
-    private record PageResult(List<Comment> items, long total) {
+    private record PageResult(List<LatestCommentItem> items, long total) {
     }
 
     public EtherealCommentsLatestEndpoint(ExtensionClient client,
@@ -146,10 +150,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             // 未启用缓存：直接下推一次索引查询（过滤 + 排序 + 分页），只取 size 条
             cache = null;
             PageResult page = queryPage(size, eff.includePage());
-            List<LatestCommentItem> items = page.items().stream()
-                .map(this::toItem)
-                .toList();
-            return new LatestCommentResult(size, page.total(), items);
+            return new LatestCommentResult(size, page.total(), page.items());
         }
 
         long now = System.currentTimeMillis();
@@ -159,10 +160,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             || entry.maxSize() != eff.maxSize()) {
             // 缓存按「单次请求上限」存满量，后续请求按各自 size 切片即可命中
             PageResult page = queryPage(eff.maxSize(), eff.includePage());
-            List<LatestCommentItem> items = page.items().stream()
-                .map(this::toItem)
-                .toList();
-            entry = new CacheEntry(now, eff.maxSize(), page.total(), items);
+            entry = new CacheEntry(now, eff.maxSize(), page.total(), page.items());
             cache = entry;
         }
         List<LatestCommentItem> sliced = entry.items().size() > size
@@ -188,18 +186,53 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
                 isNull("metadata.deletionTimestamp")
             ))
             .build();
-        var pageRequest = PageRequestImpl.of(1, fetchSize,
-            Sort.by(Sort.Order.desc("spec.creationTime"), Sort.Order.asc("metadata.name")));
-        ListResult<Comment> raw = client.listBy(Comment.class, options, pageRequest);
-        long total = raw.getTotal();
-        if (includePage) {
-            return new PageResult(raw.getItems(), total);
+        var sort = Sort.by(Sort.Order.desc("spec.creationTime"),
+            Sort.Order.asc("metadata.name"));
+
+        // 顶层评论 + 回复都要聚合：Halo 把「回复」存在独立的 Reply 扩展里，
+        // 只查 Comment 会漏掉子楼层（大量热评都发生在回复里）。
+        ListResult<Comment> comments = client.listBy(Comment.class, options,
+            PageRequestImpl.of(1, fetchSize, sort));
+        ListResult<Reply> replies = client.listBy(Reply.class, options,
+            PageRequestImpl.of(1, fetchSize, sort));
+
+        // 批量取回复的父评论（按 commentName 去重），拿父评论的 subjectRef
+        Map<String, Ref> parentRefs = new HashMap<>();
+        for (Reply r : replies.getItems()) {
+            String pn = r.getSpec() == null ? null : r.getSpec().getCommentName();
+            if (!hasText(pn) || parentRefs.containsKey(pn)) {
+                continue;
+            }
+            parentRefs.put(pn, client.fetch(Comment.class, pn)
+                .map(c -> c.getSpec() == null ? null : c.getSpec().getSubjectRef())
+                .orElse(null));
         }
-        List<Comment> filtered = raw.getItems().stream()
-            .filter(c -> !isPageSubject(c))
+
+        record Entry(Instant time, LatestCommentItem item, boolean pageSubject) {
+        }
+        List<Entry> entries = new ArrayList<>(
+            comments.getItems().size() + replies.getItems().size());
+        for (Comment c : comments.getItems()) {
+            Ref ref = c.getSpec() == null ? null : c.getSpec().getSubjectRef();
+            entries.add(new Entry(creationTimeOf(c), toItem(c), isPageRef(ref)));
+        }
+        for (Reply r : replies.getItems()) {
+            String pn = r.getSpec() == null ? null : r.getSpec().getCommentName();
+            Ref ref = hasText(pn) ? parentRefs.get(pn) : null;
+            if (ref == null) {
+                // 父评论已删除（孤儿回复），拿不到归属文章，跳过以免出现无标题条目
+                continue;
+            }
+            entries.add(new Entry(creationTimeOf(r), toReplyItem(r, ref), isPageRef(ref)));
+        }
+
+        List<LatestCommentItem> items = entries.stream()
+            .filter(e -> includePage || !e.pageSubject())
+            .sorted(Comparator.comparing(Entry::time).reversed())
             .limit(size)
+            .map(Entry::item)
             .toList();
-        return new PageResult(filtered, total);
+        return new PageResult(items, comments.getTotal() + replies.getTotal());
     }
 
     /**
@@ -208,94 +241,123 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
      * <p>{@code subjectRef.kind} 未建索引，无法下推为 fieldSelector，故在内存过滤；
      * Halo 的页面扩展正式名为 {@code SinglePage}，部分旧数据写成 {@code Page}，两者都算。
      */
-    private boolean isPageSubject(Comment comment) {
-        var spec = comment.getSpec();
-        if (spec == null || spec.getSubjectRef() == null) {
+    private boolean isPageRef(Ref ref) {
+        if (ref == null || ref.getKind() == null) {
             return false;
         }
-        String kind = spec.getSubjectRef().getKind();
+        String kind = ref.getKind();
         return "SinglePage".equals(kind) || "Page".equals(kind);
+    }
+
+    /** owner 脱敏视图（评论与回复共用）。 */
+    private record OwnerView(String displayName, String emailHash, String avatar) {
+    }
+
+    /** subjectRef 解析视图（评论与回复共用）。 */
+    private record SubjectView(SubjectRefView refView, String permalink, String title) {
     }
 
     private LatestCommentItem toItem(Comment comment) {
         var meta = comment.getMetadata();
         var spec = comment.getSpec();
-        var owner = spec.getOwner();
-
-        String displayName = null;
-        String emailHash = null;
-        String avatar = null;
-        if (owner != null) {
-            displayName = owner.getDisplayName();
-            Map<String, String> annotations = owner.getAnnotations();
-            if (annotations != null) {
-                avatar = annotations.get(CommentOwner.AVATAR_ANNO);
-                emailHash = annotations.get(CommentOwner.EMAIL_HASH_ANNO);
-            }
-            // ⚠️ 直读 DB 绕过了 Halo 查询层（api.halo.run）对 owner 的加工，须手动补齐：
-            //   1) Email 访客：Halo 在返回时注入 email-hash = sha256(小写邮箱) 并抹空明文 name，
-            //      DB 原始数据无该注解（仅 website），故用 owner.name（明文邮箱）现算 —— 算法与
-            //      CommentNextAvatarUrlResolver.forEmail 完全一致（weavatar 按 sha256 寻址）；
-            //   2) User（登录用户）：Halo 会把 User 扩展的 spec.avatar 注入顶层 owner.avatar，
-            //      DB owner 无该注解，须 fetch /registry/users/<name> 取 spec.avatar —— 与
-            //      CommentNext userService.getUserOrGhost 行为一致。
-            //  主题侧 resolveAvatar/adaptItem 无需任何改动（视觉与评论区统一）。
-            if (emailHash == null
-                && CommentOwner.KIND_EMAIL.equals(owner.getKind())
-                && hasText(owner.getName())) {
-                emailHash = sha256Hex(owner.getName().strip().toLowerCase(Locale.ROOT));
-            }
-            if (User.KIND.equals(owner.getKind()) && hasText(owner.getName())) {
-                Optional<Map<String, Object>> userData = fetchUser(owner.getName().strip());
-                if (avatar == null) {
-                    avatar = userData
-                        .flatMap(d -> Unstructured.getNestedValue(d, "spec", "avatar"))
-                        .map(String::valueOf)
-                        .filter(this::hasText)
-                        .orElse(null);
-                }
-                if (emailHash == null) {
-                    emailHash = userData
-                        .flatMap(d -> Unstructured.getNestedValue(d, "spec", "email"))
-                        .map(String::valueOf)
-                        .filter(this::hasText)
-                        .map(email -> sha256Hex(email.strip().toLowerCase(Locale.ROOT)))
-                        .orElse(null);
-                }
-            }
-        }
-
+        OwnerView owner = resolveOwner(spec.getOwner());
+        SubjectView subject = resolveSubject(spec.getSubjectRef());
         String content = spec.getRaw() != null ? spec.getRaw() : spec.getContent();
-
-        Ref ref = spec.getSubjectRef();
-        SubjectRefView refView = null;
-        String permalink = null;
-        String subjectTitle = null;
-        if (ref != null) {
-            refView = new SubjectRefView(ref.getGroup(), ref.getVersion(), ref.getKind(),
-                ref.getName());
-            Optional<Map<String, Object>> data = fetchSubject(ref);
-            permalink = data.map(d -> nestedString(d, "status", "permalink")).orElse(null);
-            subjectTitle = data.map(d -> nestedString(d, "spec", "title")).orElse(null);
-            // 部分扩展没有 status.permalink（Moment 只有 metadata/owner/spec/stats；
-            // Plugin 扩展只有 spec/status.phase 等运行态），无法靠通用 fetchSubject 拿到前端链接，
-            // 这里按主题的固定路由规则兜底拼 permalink（评论锚点 #comment 由主题侧补）。
-            if (permalink == null) {
-                permalink = synthesizePermalink(ref);
-            }
-        }
-
         return new LatestCommentItem(
             meta == null ? null : meta.getName(),
-            displayName,
-            emailHash,
-            avatar,
+            owner.displayName(),
+            owner.emailHash(),
+            owner.avatar(),
             content,
             creationTimeOf(comment).toString(),
-            refView,
-            subjectTitle,
-            permalink
+            subject.refView(),
+            subject.title(),
+            subject.permalink()
         );
+    }
+
+    /**
+     * 回复（Reply）转视图。
+     *
+     * <p>Reply 自身没有 {@code subjectRef}，只能通过 {@code spec.commentName}
+     * 找到父评论，再取父评论的 subjectRef 拿文章标题 / permalink。
+     */
+    private LatestCommentItem toReplyItem(Reply reply, Ref parentRef) {
+        var meta = reply.getMetadata();
+        var spec = reply.getSpec();
+        OwnerView owner = resolveOwner(spec.getOwner());
+        SubjectView subject = resolveSubject(parentRef);
+        String content = spec.getRaw() != null ? spec.getRaw() : spec.getContent();
+        return new LatestCommentItem(
+            meta == null ? null : meta.getName(),
+            owner.displayName(),
+            owner.emailHash(),
+            owner.avatar(),
+            content,
+            creationTimeOf(reply).toString(),
+            subject.refView(),
+            subject.title(),
+            subject.permalink()
+        );
+    }
+
+    private OwnerView resolveOwner(CommentOwner owner) {
+        if (owner == null) {
+            return new OwnerView(null, null, null);
+        }
+        String displayName = owner.getDisplayName();
+        String emailHash = null;
+        String avatar = null;
+        Map<String, String> annotations = owner.getAnnotations();
+        if (annotations != null) {
+            avatar = annotations.get(CommentOwner.AVATAR_ANNO);
+            emailHash = annotations.get(CommentOwner.EMAIL_HASH_ANNO);
+        }
+        // ⚠️ 直读 DB 绕过了 Halo 查询层（api.halo.run）对 owner 的加工，须手动补齐：
+        //   1) Email 访客：Halo 在返回时注入 email-hash = sha256(小写邮箱) 并抹空明文 name，
+        //      DB 原始数据无该注解（仅 website），故用 owner.name（明文邮箱）现算；
+        //   2) User（登录用户）：Halo 会把 User 扩展的 spec.avatar 注入顶层 owner.avatar，
+        //      DB owner 无该注解，须 fetch /registry/users/ 取 spec.avatar。
+        if (emailHash == null
+            && CommentOwner.KIND_EMAIL.equals(owner.getKind())
+            && hasText(owner.getName())) {
+            emailHash = sha256Hex(owner.getName().strip().toLowerCase(Locale.ROOT));
+        }
+        if (User.KIND.equals(owner.getKind()) && hasText(owner.getName())) {
+            Optional<Map<String, Object>> userData = fetchUser(owner.getName().strip());
+            if (avatar == null) {
+                avatar = userData
+                    .flatMap(d -> Unstructured.getNestedValue(d, "spec", "avatar"))
+                    .map(String::valueOf)
+                    .filter(this::hasText)
+                    .orElse(null);
+            }
+            if (emailHash == null) {
+                emailHash = userData
+                    .flatMap(d -> Unstructured.getNestedValue(d, "spec", "email"))
+                    .map(String::valueOf)
+                    .filter(this::hasText)
+                    .map(email -> sha256Hex(email.strip().toLowerCase(Locale.ROOT)))
+                    .orElse(null);
+            }
+        }
+        return new OwnerView(displayName, emailHash, avatar);
+    }
+
+    private SubjectView resolveSubject(Ref ref) {
+        if (ref == null) {
+            return new SubjectView(null, null, null);
+        }
+        SubjectRefView refView = new SubjectRefView(ref.getGroup(), ref.getVersion(),
+            ref.getKind(), ref.getName());
+        Optional<Map<String, Object>> data = fetchSubject(ref);
+        String permalink = data.map(d -> nestedString(d, "status", "permalink")).orElse(null);
+        String title = data.map(d -> nestedString(d, "spec", "title")).orElse(null);
+        // 部分扩展没有 status.permalink（Moment / Plugin 等），按主题固定路由兜底拼链接
+        if (permalink == null) {
+            permalink = synthesizePermalink(ref);
+        }
+        return new SubjectView(refView, permalink, title);
     }
 
     /**
@@ -365,6 +427,18 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             return spec.getCreationTime();
         }
         var meta = comment.getMetadata();
+        if (meta != null && meta.getCreationTimestamp() != null) {
+            return meta.getCreationTimestamp();
+        }
+        return Instant.EPOCH;
+    }
+
+    private Instant creationTimeOf(Reply reply) {
+        var spec = reply.getSpec();
+        if (spec != null && spec.getCreationTime() != null) {
+            return spec.getCreationTime();
+        }
+        var meta = reply.getMetadata();
         if (meta != null && meta.getCreationTimestamp() != null) {
             return meta.getCreationTimestamp();
         }
