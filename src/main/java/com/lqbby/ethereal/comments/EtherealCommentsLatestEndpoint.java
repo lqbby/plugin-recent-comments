@@ -9,13 +9,17 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.server.RouterFunction;
@@ -60,6 +64,8 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
     private static final int MAX_SIZE = 20;
     /** 匿名访问的默认结果缓存秒数（>0 才启用；0 表示实时查询）。 */
     private static final int CACHE_SECONDS = 60;
+    /** 默认排除的账号（AI 自动回复），可在后台设置里改。 */
+    private static final String DEFAULT_EXCLUDE_OWNERS = "ailqbby";
     /** subjectRef.version 缺失时的兜底版本，Halo 内置扩展多为 v1alpha1。 */
     private static final String FALLBACK_VERSION = "v1alpha1";
 
@@ -75,7 +81,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
 
     /** 设置项归一化后的生效值（null 安全，超出范围回退默认）。 */
     private record Effective(int defaultSize, int maxSize, int cacheSeconds,
-                             boolean includePage) {
+                             boolean includePage, Set<String> excludedOwners) {
     }
 
     /** 查询结果（过滤后的条目 + 库内总数）。 */
@@ -121,7 +127,17 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         int cacheSeconds = clamp(config.getCacheSeconds(), 0, 3600, CACHE_SECONDS);
         // 未配置时默认排除页面评论（侧栏「最近评论」只聚合文章评论）
         boolean includePage = Boolean.TRUE.equals(config.getIncludePageComments());
-        return new Effective(defaultSize, maxSize, cacheSeconds, includePage);
+        Set<String> excludedOwners = parseExcludeOwners(config.getExcludeOwners());
+        return new Effective(defaultSize, maxSize, cacheSeconds, includePage, excludedOwners);
+    }
+
+    /** 解析「排除用户名」（逗号/空格分隔，支持中文逗号）。 */
+    private Set<String> parseExcludeOwners(String raw) {
+        String value = (raw == null || raw.isBlank()) ? DEFAULT_EXCLUDE_OWNERS : raw;
+        return Arrays.stream(value.split("[,，\\s]+"))
+            .map(String::trim)
+            .filter(s -> !s.isBlank())
+            .collect(Collectors.toCollection(HashSet::new));
     }
 
     private int clamp(Integer raw, int min, int max, int fallback) {
@@ -149,7 +165,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         if (eff.cacheSeconds() <= 0) {
             // 未启用缓存：直接下推一次索引查询（过滤 + 排序 + 分页），只取 size 条
             cache = null;
-            PageResult page = queryPage(size, eff.includePage());
+            PageResult page = queryPage(size, eff.includePage(), eff.excludedOwners());
             return new LatestCommentResult(size, page.total(), page.items());
         }
 
@@ -159,7 +175,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             || now - entry.cachedAt() > eff.cacheSeconds() * 1000L
             || entry.maxSize() != eff.maxSize()) {
             // 缓存按「单次请求上限」存满量，后续请求按各自 size 切片即可命中
-            PageResult page = queryPage(eff.maxSize(), eff.includePage());
+            PageResult page = queryPage(eff.maxSize(), eff.includePage(), eff.excludedOwners());
             entry = new CacheEntry(now, eff.maxSize(), page.total(), page.items());
             cache = entry;
         }
@@ -176,7 +192,7 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
      * Halo 为 Comment 注册了索引（见 core 的 SchemeInitializer），可直接作 fieldSelector
      * 与 sort 字段；未索引字段会被引擎拒绝。排序加 metadata.name 作稳定分页的次级键。
      */
-    private PageResult queryPage(int size, boolean includePage) {
+    private PageResult queryPage(int size, boolean includePage, Set<String> excluded) {
         // 需要过滤时多取候选，保证过滤后仍能凑够 size 条
         int fetchSize = includePage ? size : Math.min(Math.max(size * 6, 30), 200);
         var options = ListOptions.builder()
@@ -213,10 +229,16 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
         List<Entry> entries = new ArrayList<>(
             comments.getItems().size() + replies.getItems().size());
         for (Comment c : comments.getItems()) {
+            if (isExcludedOwner(c.getSpec() == null ? null : c.getSpec().getOwner(), excluded)) {
+                continue;
+            }
             Ref ref = c.getSpec() == null ? null : c.getSpec().getSubjectRef();
             entries.add(new Entry(creationTimeOf(c), toItem(c), isPageRef(ref)));
         }
         for (Reply r : replies.getItems()) {
+            if (isExcludedOwner(r.getSpec() == null ? null : r.getSpec().getOwner(), excluded)) {
+                continue;
+            }
             String pn = r.getSpec() == null ? null : r.getSpec().getCommentName();
             Ref ref = hasText(pn) ? parentRefs.get(pn) : null;
             if (ref == null) {
@@ -241,6 +263,18 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
      * <p>{@code subjectRef.kind} 未建索引，无法下推为 fieldSelector，故在内存过滤；
      * Halo 的页面扩展正式名为 {@code SinglePage}，部分旧数据写成 {@code Page}，两者都算。
      */
+    /**
+     * 判断该评论/回复的 owner 是否在排除名单里（如 AI 自动回复账号 ailqbby）。
+     * 按 {@code owner.name}（账号名）比对，避免误伤同名的普通访客。
+     */
+    private boolean isExcludedOwner(CommentOwner owner, Set<String> excluded) {
+        if (owner == null || excluded.isEmpty()) {
+            return false;
+        }
+        String name = owner.getName();
+        return name != null && excluded.contains(name.trim());
+    }
+
     private boolean isPageRef(Ref ref) {
         if (ref == null || ref.getKind() == null) {
             return false;

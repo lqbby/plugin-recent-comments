@@ -18,6 +18,9 @@ public class RecentCommentsConfig {
     /** 是否把自定义页面（SinglePage/Page）的评论也算进「最近评论」，默认 false（排除）。 */
     private Boolean includePageComments;
 
+    /** 排除的用户名（逗号分隔），如 AI 自动回复账号；这些账号的评论/回复不进最近评论。 */
+    private String excludeOwners;
+
     public Integer getDefaultSize() {
         return defaultSize;
     }
@@ -48,5 +51,13 @@ public class RecentCommentsConfig {
 
     public void setIncludePageComments(Boolean includePageComments) {
         this.includePageComments = includePageComments;
+    }
+
+    public String getExcludeOwners() {
+        return excludeOwners;
+    }
+
+    public void setExcludeOwners(String excludeOwners) {
+        this.excludeOwners = excludeOwners;
     }
 }
