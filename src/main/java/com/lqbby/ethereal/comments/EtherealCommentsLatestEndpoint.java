@@ -298,9 +298,25 @@ public class EtherealCommentsLatestEndpoint implements CustomEndpoint {
             (ref.getVersion() == null || ref.getVersion().isBlank())
                 ? FALLBACK_VERSION
                 : ref.getVersion();
-        var gvk = new GroupVersionKind(group, version, ref.getKind());
-        return client.fetch(gvk, name)
-            .map(unstructured -> (Map<String, Object>) unstructured.getData());
+        var gvk = new GroupVersionKind(group, version, normalizeKind(ref.getKind()));
+        try {
+            return client.fetch(gvk, name)
+                .map(unstructured -> (Map<String, Object>) unstructured.getData());
+        } catch (Exception e) {
+            // scheme 未注册 / 未知 kind（如 Page）会抛 "Scheme not found ..."，
+            // 若不兜住整个端点会 500，侧栏被迫降级。这里静默跳过，
+            // permalink 交给 synthesizePermalink 兜底。
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * 归一 subjectRef.kind：Halo 的自定义页面扩展实际是 {@code SinglePage}，
+     * 但部分评论（Comment Next 聊天气泡 / 旧数据）写成 {@code Page}，
+     * 直接 fetch 会抛 Scheme not found 导致端点 500。
+     */
+    private String normalizeKind(String kind) {
+        return "Page".equals(kind) ? "SinglePage" : kind;
     }
 
     private String nestedString(Map<String, Object> data, String... path) {
